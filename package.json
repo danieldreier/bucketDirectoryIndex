@@ -1,0 +1,16 @@
+{
+  "name": "cloudfunction",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "fast-crc32c": "^1.0.4",
+    "google-cloud": "^0.49.0",
+    "mustache": "^2.3.0"
+  }
+}
