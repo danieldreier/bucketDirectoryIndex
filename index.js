@@ -4,9 +4,12 @@
  * @param {object} event The Cloud Functions event.
  * @param {function} The callback function.
  */
+
+require('@google-cloud/debug-agent').start();
+
 exports.generateDirectoryIndex = function generateDirectoryIndex (event, callback) {
   console.log("generateDirectoryIndex called with event", event)
-  handleFileChangeEvent(event)
+  handleFileChangeEvent(event, callback)
 }
 
 // return the logical directory that a given object is in
@@ -68,7 +71,8 @@ function filterBucketContents(files, prefix) {
 // return file names, size, and last modified date
 function listObjectsAndDirectories(projectId, bucket, prefix, callback) {
   console.log("listObjectsAndDirectories called")
-  console.log(`listing items in ${bucket.name} under prefix ${prefix}`)
+    //  prefix = prefix.length == 0 ? "/" : prefix
+  console.log(`listing items in ${bucket.name} under prefix ${prefix}`);
   var gcloud = require('google-cloud')({
     projectId: projectId
   });
@@ -104,7 +108,7 @@ function listObjectsAndDirectories(projectId, bucket, prefix, callback) {
 
 // render HTML directory index
 function renderIndex(prefix, objectList) {
-  console.log("renderIndex called")
+  console.log("renderIndex called for objects", objectList)
   var Mustache = require('mustache');
   var fs = require('fs');
 
@@ -184,7 +188,7 @@ function isIndex(objectName) {
 
 // entry point for cloud function
 //function handleFileChangeEvent(event, callback) {
-function handleFileChangeEvent(event) {
+function handleFileChangeEvent(event, callback) {
   // figure out what bucket and objects we're operating on
   var objectName         = objectNameFromEvent(event);
   var prefix             = prefixFromObjectName(objectName);
@@ -195,7 +199,7 @@ function handleFileChangeEvent(event) {
   // skip execution if the file updated was an index.html, because it was probably
   // created by a previous invocation of this code
   if ( isIndex(objectName) ) {
-    return true;
+    callback();
   } else {
     // list objects and directories at the same level as the object
     // in the event we're handling
@@ -205,6 +209,7 @@ function handleFileChangeEvent(event) {
       var htmlDirectoryIndex = renderIndex(prefix, files);
       //console.log(htmlDirectoryIndex);
       saveIndexToBucket(projectId, bucket, prefix, htmlDirectoryIndex);
+      callback();
     });
   }
 }
