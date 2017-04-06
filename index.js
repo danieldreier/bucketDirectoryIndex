@@ -25,7 +25,7 @@ function projectId() {
   return "puppet-downloads";
 }
 function objectNameFromEvent(event) {
-  console.log("objectNameFromEvent", event.data.name)
+  console.log("objectNameFromEvent", event)
   return event.data.name;
 }
 
@@ -49,8 +49,8 @@ function connectToBucket(projectId,bucketName) {
 
 function filterBucketContents(files, prefix) {
   console.log(`filterBucketContents(files, ${prefix})`)
-  console.log(files)
   return files.filter(function(file) { 
+    return true;
      // include directories but not their contents
     if (file.name.endsWith("/") ) {
       return true
@@ -81,21 +81,25 @@ function listObjectsAndDirectories(projectId, bucket, prefix, callback) {
       console.log("bucket.getFiles")
       console.log(`bucket.getFiles returned ${files.length} results`)
       callback(files.filter(function(file) {
-        console.log(`listObjectsAndDirectories file name ${file.name} and prefix ${prefix}`)
           // prevent directories from being listed within their own directory listing
           if (file.name == prefix + "/") {
+            console.log(`listObjectsAndDirectories rejected file name ${file.name} because it's the directory being listed`)
             return false
           }
 
-          // include folders in the listing
-          if (file.name.endsWith("/")) {
-             return true
-          }
            // include files within the immediate folder
           if (file.name.split("/").length == prefix.split("/").length + 1 ) {
+            console.log(`listObjectsAndDirectories rejected file name ${file.name} because it's not in the prefix folder`)
+            return true
+          }
+ 
+          // include folders in the listing
+          if (file.name.endsWith("/")) {
+            console.log(`listObjectsAndDirectories accepted file name ${file.name} because it ends with /`)
             return true
           }
           // include nothing else
+          console.log(`listObjectsAndDirectories defaulted to rejecting file name ${file.name}`)
           return false
       })
       )
