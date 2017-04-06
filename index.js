@@ -5,9 +5,9 @@
  * @param {function} The callback function.
  */
 
-require('@google-cloud/debug-agent').start();
 
 exports.generateDirectoryIndex = function generateDirectoryIndex (event, callback) {
+  require('@google-cloud/debug-agent').start();
   console.log("generateDirectoryIndex called with event", event)
   handleFileChangeEvent(event, callback)
 }
