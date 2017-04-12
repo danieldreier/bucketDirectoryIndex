@@ -1,37 +1,136 @@
 /**
- * Background Cloud Function to be triggered by Cloud Storage.
- *
- * @param {object} event The Cloud Functions event.
- * @param {function} The callback function.
+ * Simple object check.
+ * @param item
+ * @returns {boolean}
  */
-require('@google-cloud/debug-agent').start();
-
-
-exports.generateDirectoryIndex = function generateDirectoryIndex (event, callback) {
-  console.log("generateDirectoryIndex called with event", event)
-  handleFileChangeEvent(event, callback)
+function isObject(item) {
+  return (item && typeof item === 'object' && !Array.isArray(item));
 }
 
-// return the logical directory that a given object is in
-function prefixFromObjectName(name) {
-  console.log("name", name)
-  var path = name.split("/");
-  path.pop();
-  prefix = path.join("/");
-  return prefix;
+/**
+ * Deep merge two objects.
+ * @param target
+ * @param ...sources
+ */
+function mergeDeep(target, ...sources) {
+  if (!sources.length) return target;
+  const source = sources.shift();
+
+  if (isObject(target) && isObject(source)) {
+    for (const key in source) {
+      if (isObject(source[key])) {
+        if (!target[key]) Object.assign(target, { [key]: {} });
+        mergeDeep(target[key], source[key]);
+      } else {
+        Object.assign(target, { [key]: source[key] });
+      }
+    }
+  }
+
+  return mergeDeep(target, ...sources);
 }
 
-function projectId() {
-  return "puppet-downloads";
-}
-function objectNameFromEvent(event) {
-  console.log("objectNameFromEvent", event)
-  return event.data.name;
+// convert a string path to a nested object
+function path_to_hash(str, metadata) {
+  metadata["type"] = "file"
+
+  var output = str.split("/").reverse().reduce(function(memo, item) {
+    var obj = {
+      metadata: {
+        type: "dir"
+      }
+    }
+    obj[item] = memo
+    return obj
+  }, {metadata: metadata})
+  return output
 }
 
-function bucketNameFromEvent(event) {
-  console.log("bucketNameFromEvent", event.data.bucket)
-  return event.data.bucket;
+// merge to a common hash
+function objectListToTree(arr) {
+  return arr.map(function(obj) {
+    return path_to_hash(obj["path"], obj["metadata"])
+  }).reduce(function(memo, obj) {
+    var combined = mergeDeep(memo, obj) 
+      return combined
+  })
+}
+
+// render HTML directory index
+function renderIndex(prefix, objectList) {
+  //console.log("renderIndex called for objects", objectList)
+  var Mustache = require('mustache');
+  var fs = require('fs');
+
+  function loadTemplate() {
+    return fs.readFileSync('templates/index.html').toString();
+  }
+
+  fileList = objectList.map(function(file) {
+
+    if ( file.metadata.type == "file" ) {
+      file.metadata.lastModified = (new Date(file.metadata.lastModified)).toLocaleDateString('en-US',
+        { year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric',
+          minute: 'numeric', hour12: false});
+    } else {
+      // directories don't list size or last modified date, and directory names should end with /
+      file.metadata.lastModified = "-"
+      file.metadata.size = "-"
+      file.name = file.name + "/"
+    }
+
+    return {
+      "path": file.name,
+      "size": file.metadata.size,
+      "lastModified": file.metadata.lastModified
+    }
+  }).filter(function(file){
+    // exclude zero-length file names to hide data about the current path
+    if (file.path.length == 0) {
+      return false
+    }
+    // hide index.html files
+    if (file.path == "index.html") {
+      return false
+    }
+    return true
+  })
+
+  var files = {
+    "files": fileList,
+    "prefix": prefix.join("/")
+  }
+
+  //console.log("rendering index with files", files)
+
+  var htmlDirectoryIndex = Mustache.to_html(loadTemplate(), files);
+
+  return htmlDirectoryIndex;
+}
+
+function generateIndexes(tree, path) {
+  // generate a list of keys at the current level
+  var keys = Object.keys(tree).filter(function(key) {
+    return key != "metadata"; // filter out metadata keys
+  })
+
+  // get the metadata for each of those keys
+  var fileMetaData = keys.map(function(key){
+    return {
+      name: key,
+      metadata: tree[key]["metadata"]
+    }
+  })
+
+  // generate the directory index
+  generateIndex(path, fileMetaData)
+
+  // recurse into each directory
+  keys.forEach(function(key,index) {
+    if (tree[key]["metadata"]["type"] == "dir") {
+      generateIndexes(tree[key], path.concat([key]))
+    }
+  })
 }
 
 function connectToBucket(projectId,bucketName) {
@@ -41,116 +140,38 @@ function connectToBucket(projectId,bucketName) {
   });
   var gcs = gcloud.storage({
     projectId: projectId,
-//    keyFilename: '/Users/daniel/development/learn_node/cloudfunction/puppet-downloads-2ea22018bfb0.json'
+    keyFilename: '/Users/daniel/development/learn_node/cloudfunction/puppet-downloads-2ea22018bfb0.json'
   });
   var bucket = gcs.bucket(bucketName)
   return bucket;
 }
 
-function filterBucketContents(files, prefix) {
-  console.log(`filterBucketContents(files, ${prefix})`)
-  return files.filter(function(file) { 
-    return true;
-     // include directories but not their contents
-    if (file.name.endsWith("/") ) {
-      return true
-    }
-    // include files within the immediate folder
-    if (file.name.split("/").length == prefix.split("/").length + 1 ) {
-      return true
-    }   
-  }).map(function(file){
-    return { "path": file.name,
-            "size": file.metadata.size,
-            "lastModified": file.metadata.updated
-           };
-  })
-}
-
-// list objects and directories in a given bucket prefix
 // return file names, size, and last modified date
-function listObjectsAndDirectories(projectId, bucket, prefix, callback) {
+function listObjectsAndDirectories(projectId, bucket, callback) {
   console.log("listObjectsAndDirectories called")
-    //  prefix = prefix.length == 0 ? "/" : prefix
-  console.log(`listing items in ${bucket.name} under prefix ${prefix}`);
+  //console.log(`listing items in ${bucket.name}`);
   var gcloud = require('google-cloud')({
     projectId: projectId
   });
-  bucket.getFiles({prefix: prefix}, function(err, files) {
+  bucket.getFiles(function(err, files) {
     if (!err) {
-      console.log("bucket.getFiles")
+      //console.log("bucket.getFiles")
       console.log(`bucket.getFiles returned ${files.length} results`)
-      callback(files.filter(function(file) {
-          // prevent directories from being listed within their own directory listing
-          if (file.name == prefix + "/") {
-            console.log(`listObjectsAndDirectories rejected file name ${file.name} because it's the directory being listed`)
-            return false
+      callback(files.map(function(file){
+        return {
+          "path": file.name,
+          "metadata": {
+            "lastModified": file.metadata.updated,
+            "size": file.metadata.size
           }
-
-           // include files within the immediate folder
-          if (file.name.split("/").length == prefix.split("/").length + 1 ) {
-            console.log(`listObjectsAndDirectories rejected file name ${file.name} because it's not in the prefix folder`)
-            return true
-          }
- 
-          // include folders in the listing
-          if (file.name.endsWith("/")) {
-            console.log(`listObjectsAndDirectories accepted file name ${file.name} because it ends with /`)
-            return true
-          }
-          // include nothing else
-          console.log(`listObjectsAndDirectories defaulted to rejecting file name ${file.name}`)
-          return false
-      })
-      )
+        }
+      }
+  ))
     } else {
       console.error(err)
       process.exit(1);
     }
   } )
-}
-
-// render HTML directory index
-function renderIndex(prefix, objectList) {
-  console.log("renderIndex called for objects", objectList)
-  var Mustache = require('mustache');
-  var fs = require('fs');
-
-  function loadTemplate() {
-    return fs.readFileSync('templates/index.html').toString();
-  }
-
-  fileList = objectList.map(function(file) {
-    var shortFileName;
-
-    if (file.name.endsWith("/")) {
-      shortFileName = file.name.split("/").slice(-2).join("/")
-      file.metadata.size = "- "
-      console.log("file ends with /, using file name", shortFileName)
-    } else {
-      shortFileName = file.name.split("/").pop()
-      console.log("file does not end with /, using file name", shortFileName)
-    }
-
-    file.metadata.updated = (new Date(file.metadata.updated)).toLocaleDateString('en-US', 
-      { year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', 
-        minute: 'numeric', hour12: false});
-
-    return {
-      "path": shortFileName,
-      "size": file.metadata.size,
-      "lastModified": file.metadata.updated
-    }
-  })
-
-  var files = {
-    "files": fileList,
-    "prefix": prefix
-  }
-
-  var htmlDirectoryIndex = Mustache.to_html(loadTemplate(), files);
-
-  return htmlDirectoryIndex;
 }
 
 function saveIndexToBucket(projectId, bucket, prefix, htmlDirectoryIndex) {
@@ -169,51 +190,48 @@ function saveIndexToBucket(projectId, bucket, prefix, htmlDirectoryIndex) {
     indexFilePath = prefix + "/" + "index.html"
   }
 
- 	var file = bucket.file(indexFilePath)
+  var file = bucket.file(indexFilePath)
     var wstream = file.createWriteStream({
       metadata: {
         contentType: "text/html"
       }
       })
-			.on('error', function(err) {
+      .on('error', function(err) {
         console.error(`error uploading ${indexFilePath} file`);
-			})
-			.on('finish', function() {
+      })
+      .on('finish', function() {
         console.log(`success uploading ${indexFilePath} file to ${bucket.name}`);
-			})
-	wstream.write(htmlDirectoryIndex);
-	wstream.end();
+      })
+  wstream.write(htmlDirectoryIndex);
+  wstream.end();
 }
 
-function isIndex(objectName) {
-  var regex = /index\.html$/;
-  return regex.test(objectName);
+function generateIndex(path, contents) {
+  var directoryIndex = renderIndex(path, contents)
+  var bucket = connectToBucket("puppet-downloads", "yum.downloads.puppet.com")
+  saveIndexToBucket("puppet-downloads", bucket, path.join("/"), directoryIndex)
 }
 
-// entry point for cloud function
-//function handleFileChangeEvent(event, callback) {
-function handleFileChangeEvent(event, callback) {
-  // figure out what bucket and objects we're operating on
-  var objectName         = objectNameFromEvent(event);
-  var prefix             = prefixFromObjectName(objectName);
-  var projectId          = "puppet-downloads";
-  var bucketName         = bucketNameFromEvent(event);
-  var bucket             = connectToBucket(projectId, bucketName);
 
-  // skip execution if the file updated was an index.html, because it was probably
-  // created by a previous invocation of this code
-  if ( isIndex(objectName) ) {
-    callback();
+var bucket = connectToBucket("puppet-downloads", "yum.downloads.puppet.com")
+listObjectsAndDirectories("puppet-downloads", bucket, function(files) {
+  generateIndexes(objectListToTree(files), [])
+})
+
+
+/**
+ * Responds to any HTTP request that can provide a "message" field in the body.
+ *
+ * @param {Object} req Cloud Function request context.
+ * @param {Object} res Cloud Function response context.
+ */
+exports.generateBucketIndexes = function generateBucketIndexes (req, res) {
+  if (req.body.message === undefined) {
+    // This is an error case, as "message" is required
+    res.status(400).send('No message defined!');
   } else {
-    // list objects and directories at the same level as the object
-    // in the event we're handling
-    listObjectsAndDirectories(projectId, bucket, prefix, function(files){
-      console.log("rendering index");
-      console.log(`bucket.getFiles returned ${files.length} results`)
-      var htmlDirectoryIndex = renderIndex(prefix, files);
-      //console.log(htmlDirectoryIndex);
-      saveIndexToBucket(projectId, bucket, prefix, htmlDirectoryIndex);
-      callback();
-    });
+    // Everything is ok
+    console.log(req.body.message);
+    res.status(200).end();
   }
-}
+};
