@@ -10,6 +10,7 @@
   "license": "ISC",
   "dependencies": {
     "@google-cloud/debug-agent": "^1.0.0",
+    "@google/cloud-errors": "^0.1.1",
     "fast-crc32c": "^1.0.4",
     "google-cloud": "^0.49.0",
     "mustache": "^2.3.0"

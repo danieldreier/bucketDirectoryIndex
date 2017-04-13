@@ -1,3 +1,12 @@
+// set up stackdriver error reporting
+var debug = require('@google-cloud/debug-agent').start({
+  allowExpressions: true,
+  projectId: 'generateBucketIndexes',
+});
+var errors = require('@google/cloud-errors').start({
+  serviceContext: {service: 'generateBucketIndexes'}
+});
+
 /**
  * Simple object check.
  * @param item
@@ -58,6 +67,7 @@ function objectListToTree(arr) {
 
 // render HTML directory index
 function renderIndex(prefix, objectList) {
+  console.log("renderIndex called")
   //console.log("renderIndex called for objects", objectList)
   var Mustache = require('mustache');
   var fs = require('fs');
@@ -108,7 +118,8 @@ function renderIndex(prefix, objectList) {
   return htmlDirectoryIndex;
 }
 
-function generateIndexes(tree, path) {
+function generateIndexes(tree, path, callback) {
+  console.log("generateIndexes called")
   // generate a list of keys at the current level
   var keys = Object.keys(tree).filter(function(key) {
     return key != "metadata"; // filter out metadata keys
@@ -131,6 +142,7 @@ function generateIndexes(tree, path) {
       generateIndexes(tree[key], path.concat([key]))
     }
   })
+  //callback.status(200).send("done generating indexes");
 }
 
 function connectToBucket(projectId,bucketName) {
@@ -140,7 +152,7 @@ function connectToBucket(projectId,bucketName) {
   });
   var gcs = gcloud.storage({
     projectId: projectId,
-    keyFilename: '/Users/daniel/development/learn_node/cloudfunction/puppet-downloads-2ea22018bfb0.json'
+//    keyFilename: '/Users/daniel/development/learn_node/cloudfunction/puppet-downloads-2ea22018bfb0.json'
   });
   var bucket = gcs.bucket(bucketName)
   return bucket;
@@ -153,7 +165,9 @@ function listObjectsAndDirectories(projectId, bucket, callback) {
   var gcloud = require('google-cloud')({
     projectId: projectId
   });
+  console.log("listObjectsAndDirectories checkpoint 2")
   bucket.getFiles(function(err, files) {
+    console.log("listObjectsAndDirectories checkpoint 3")
     if (!err) {
       //console.log("bucket.getFiles")
       console.log(`bucket.getFiles returned ${files.length} results`)
@@ -168,10 +182,13 @@ function listObjectsAndDirectories(projectId, bucket, callback) {
       }
   ))
     } else {
+      console.log("listObjectsAndDirectories checkpoint 4")
+      errors.report(new Error("error listing files in gcs bucket"));
       console.error(err)
       process.exit(1);
     }
   } )
+  console.log("listObjectsAndDirectories checkpoint 5")
 }
 
 function saveIndexToBucket(projectId, bucket, prefix, htmlDirectoryIndex) {
@@ -197,7 +214,9 @@ function saveIndexToBucket(projectId, bucket, prefix, htmlDirectoryIndex) {
       }
       })
       .on('error', function(err) {
-        console.error(`error uploading ${indexFilePath} file`);
+        var error = `error uploading ${indexFilePath} file`;
+        console.error(error);
+        errors.report(new Error(error));
       })
       .on('finish', function() {
         console.log(`success uploading ${indexFilePath} file to ${bucket.name}`);
@@ -207,16 +226,13 @@ function saveIndexToBucket(projectId, bucket, prefix, htmlDirectoryIndex) {
 }
 
 function generateIndex(path, contents) {
+  console.log("generateIndex called")
   var directoryIndex = renderIndex(path, contents)
   var bucket = connectToBucket("puppet-downloads", "yum.downloads.puppet.com")
   saveIndexToBucket("puppet-downloads", bucket, path.join("/"), directoryIndex)
 }
 
 
-var bucket = connectToBucket("puppet-downloads", "yum.downloads.puppet.com")
-listObjectsAndDirectories("puppet-downloads", bucket, function(files) {
-  generateIndexes(objectListToTree(files), [])
-})
 
 
 /**
@@ -226,12 +242,14 @@ listObjectsAndDirectories("puppet-downloads", bucket, function(files) {
  * @param {Object} res Cloud Function response context.
  */
 exports.generateBucketIndexes = function generateBucketIndexes (req, res) {
-  if (req.body.message === undefined) {
-    // This is an error case, as "message" is required
-    res.status(400).send('No message defined!');
-  } else {
-    // Everything is ok
-    console.log(req.body.message);
-    res.status(200).end();
-  }
+    console.log("generateBucketIndexes request", req)
+    errors.report(new Error('Something broke!'));
+    var bucket = connectToBucket("puppet-downloads", "yum.downloads.puppet.com")
+    listObjectsAndDirectories("puppet-downloads", bucket, function(files) {
+      console.log("listing objects in", bucket)
+      generateIndexes(objectListToTree(files), [])
+      res.status(200).send(`all done`);
+    })
+    console.log("end of the line")
+    res.status(200).send(`hello ${req.query.bucket}`);
 };
